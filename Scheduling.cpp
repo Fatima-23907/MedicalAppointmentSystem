@@ -5,9 +5,13 @@
 #include <queue>
 #include <sstream>
 #include <map>
+
 using namespace std;
 
-// ===== LEVEL-1 DSA: LINKED LIST =====
+/* =====================================================
+   LEVEL 1: LINKED LIST (Appointment Management)
+   ===================================================== */
+
 struct AppointmentNode {
     int appointmentId;
     int patientId;
@@ -21,42 +25,23 @@ struct AppointmentNode {
 class AppointmentLinkedList {
 private:
     AppointmentNode* head;
-    int nextId;
+    int autoIncrementId;
 
 public:
-    AppointmentLinkedList() {
-        head = nullptr;
-        nextId = 1;
+    AppointmentLinkedList() : head(nullptr), autoIncrementId(1) {}
+
+    void addAppointment(int patientId, int doctorId,
+                        const string& date, const string& timeSlot) {
+        AppointmentNode* node = new AppointmentNode{
+            autoIncrementId++, patientId, doctorId,
+            date, timeSlot, "SCHEDULED", head
+        };
+        head = node;
     }
 
-    void addAppointment(int patientId, int doctorId, string date, string timeSlot) {
-        AppointmentNode* newNode = new AppointmentNode();
-        newNode->appointmentId = nextId++;
-        newNode->patientId = patientId;
-        newNode->doctorId = doctorId;
-        newNode->date = date;
-        newNode->timeSlot = timeSlot;
-        newNode->status = "SCHEDULED";
-        newNode->next = head;
-        head = newNode;
-    }
-
-    void saveToFile(string filename) {
-        ofstream outFile(filename);
-        AppointmentNode* current = head;
-        while (current) {
-            outFile << current->appointmentId << ","
-                << current->patientId << ","
-                << current->doctorId << ","
-                << current->date << ","
-                << current->timeSlot << ","
-                << current->status << "\n";
-            current = current->next;
-        }
-        outFile.close();
-    }
-
-    bool isSlotAvailable(int doctorId, string date, string timeSlot) {
+    bool isSlotAvailable(int doctorId,
+                         const string& date,
+                         const string& timeSlot) const {
         AppointmentNode* current = head;
         while (current) {
             if (current->doctorId == doctorId &&
@@ -70,37 +55,52 @@ public:
         return true;
     }
 
-    void loadFromFile(string filename) {
-        ifstream inFile(filename);
-        if (!inFile.is_open()) return;
+    void saveToFile(const string& filename) const {
+        ofstream out(filename);
+        AppointmentNode* current = head;
+
+        while (current) {
+            out << current->appointmentId << ","
+                << current->patientId << ","
+                << current->doctorId << ","
+                << current->date << ","
+                << current->timeSlot << ","
+                << current->status << "\n";
+            current = current->next;
+        }
+    }
+
+    void loadFromFile(const string& filename) {
+        ifstream in(filename);
+        if (!in.is_open()) return;
 
         string line;
-        while (getline(inFile, line)) {
+        while (getline(in, line)) {
             stringstream ss(line);
-            AppointmentNode* newNode = new AppointmentNode();
+            AppointmentNode* node = new AppointmentNode();
             string temp;
 
-            getline(ss, temp, ','); newNode->appointmentId = stoi(temp);
-            getline(ss, temp, ','); newNode->patientId = stoi(temp);
-            getline(ss, temp, ','); newNode->doctorId = stoi(temp);
-            getline(ss, newNode->date, ',');
-            getline(ss, newNode->timeSlot, ',');
-            getline(ss, newNode->status, ',');
+            getline(ss, temp, ','); node->appointmentId = stoi(temp);
+            getline(ss, temp, ','); node->patientId = stoi(temp);
+            getline(ss, temp, ','); node->doctorId = stoi(temp);
+            getline(ss, node->date, ',');
+            getline(ss, node->timeSlot, ',');
+            getline(ss, node->status, ',');
 
-            newNode->next = head;
-            head = newNode;
+            node->next = head;
+            head = node;
 
-            if (newNode->appointmentId >= nextId) {
-                nextId = newNode->appointmentId + 1;
-            }
+            autoIncrementId = max(autoIncrementId, node->appointmentId + 1);
         }
-        inFile.close();
     }
 };
 
 AppointmentLinkedList appointmentList;
 
-// ===== LEVEL-2 DSA: GRAPH (Time Slot Availability) =====
+/* =====================================================
+   LEVEL 2: GRAPH (Doctor Time Slot Availability)
+   ===================================================== */
+
 struct TimeSlot {
     string time;
     bool available;
@@ -109,139 +109,147 @@ struct TimeSlot {
 
 class TimeSlotGraph {
 private:
-    map<string, vector<TimeSlot>> adjacencyList; // date -> time slots
+    map<string, vector<TimeSlot>> scheduleGraph;
 
-public:
-    void initializeDay(string date, int doctorId) {
-        vector<string> timeSlots = {
+    vector<string> defaultSlots() const {
+        return {
             "09:00-10:00", "10:00-11:00", "11:00-12:00",
             "14:00-15:00", "15:00-16:00", "16:00-17:00"
         };
+    }
 
-        for (const string& slot : timeSlots) {
-            if (appointmentList.isSlotAvailable(doctorId, date, slot)) {
-                adjacencyList[date].push_back({ slot, true, doctorId });
-            }
-            else {
-                adjacencyList[date].push_back({ slot, false, doctorId });
-            }
+public:
+    void setupDay(const string& date, int doctorId) {
+        for (const string& slot : defaultSlots()) {
+            bool free = appointmentList.isSlotAvailable(doctorId, date, slot);
+            scheduleGraph[date].push_back({ slot, free, doctorId });
         }
     }
 
-    // BFS to find available slots
-    vector<string> findAvailableSlots(string date, int doctorId) {
-        vector<string> available;
-
-        if (adjacencyList.find(date) == adjacencyList.end()) {
-            initializeDay(date, doctorId);
+    // BFS-based traversal to list available slots
+    vector<string> findAvailableSlots(const string& date, int doctorId) {
+        if (!scheduleGraph.count(date)) {
+            setupDay(date, doctorId);
         }
 
-        // BFS traversal through time slots
-        queue<TimeSlot> bfsQueue;
-        for (const auto& slot : adjacencyList[date]) {
+        vector<string> available;
+        queue<TimeSlot> q;
+
+        for (const auto& slot : scheduleGraph[date]) {
             if (slot.doctorId == doctorId) {
-                bfsQueue.push(slot);
+                q.push(slot);
             }
         }
 
-        while (!bfsQueue.empty()) {
-            TimeSlot current = bfsQueue.front();
-            bfsQueue.pop();
+        while (!q.empty()) {
+            TimeSlot current = q.front();
+            q.pop();
 
             if (current.available) {
                 available.push_back(current.time);
             }
         }
-
         return available;
     }
 
-    void markSlotBooked(string date, string timeSlot, int doctorId) {
-        for (auto& slot : adjacencyList[date]) {
-            if (slot.time == timeSlot && slot.doctorId == doctorId) {
+    void markBooked(const string& date,
+                    const string& timeSlot,
+                    int doctorId) {
+        for (auto& slot : scheduleGraph[date]) {
+            if (slot.time == timeSlot &&
+                slot.doctorId == doctorId) {
                 slot.available = false;
-                break;
+                return;
             }
         }
     }
 };
 
-TimeSlotGraph timeGraph;
+TimeSlotGraph slotGraph;
 
-// ===== OPERATIONS =====
+/* =====================================================
+   FILE-BASED OPERATIONS (GUI SAFE)
+   ===================================================== */
+
+const string DATA_PATH = "../DataFiles/";
+
 void scheduleAppointment() {
-    ifstream inFile("../DataFiles/schedule_input.txt");
+    ifstream in(DATA_PATH + "schedule_input.txt");
     string line;
-    getline(inFile, line);
-    inFile.close();
+    getline(in, line);
+    in.close();
 
     stringstream ss(line);
-    string temp;
+    string temp, date, timeSlot;
     int patientId, doctorId;
-    string date, timeSlot;
 
     getline(ss, temp, ','); patientId = stoi(temp);
     getline(ss, temp, ','); doctorId = stoi(temp);
     getline(ss, date, ',');
     getline(ss, timeSlot, ',');
 
-    ofstream outFile("../DataFiles/schedule_output.txt");
+    ofstream out(DATA_PATH + "schedule_output.txt");
 
     if (appointmentList.isSlotAvailable(doctorId, date, timeSlot)) {
         appointmentList.addAppointment(patientId, doctorId, date, timeSlot);
-        timeGraph.markSlotBooked(date, timeSlot, doctorId);
+        slotGraph.markBooked(date, timeSlot, doctorId);
 
-        outFile << "SUCCESS\n";
-        outFile << "Appointment scheduled for " << date << " at " << timeSlot << "\n";
+        out << "SUCCESS\n";
+        out << "Appointment scheduled on " << date
+            << " at " << timeSlot << "\n";
     }
     else {
-        outFile << "ERROR: Time slot not available\n";
+        out << "ERROR: Time slot not available\n";
     }
-    outFile.close();
 
-    appointmentList.saveToFile("../DataFiles/appointments.txt");
+    appointmentList.saveToFile(DATA_PATH + "appointments.txt");
 }
 
 void getAvailableSlots() {
-    ifstream inFile("../DataFiles/slots_query.txt");
-    string date;
+    ifstream in(DATA_PATH + "slots_query.txt");
     int doctorId;
-    inFile >> doctorId;
-    inFile.ignore();
-    getline(inFile, date);
-    inFile.close();
+    string date;
 
-    vector<string> availableSlots = timeGraph.findAvailableSlots(date, doctorId);
+    in >> doctorId;
+    in.ignore();
+    getline(in, date);
+    in.close();
 
-    ofstream outFile("../DataFiles/available_slots.txt");
-    outFile << "AVAILABLE_SLOTS\n";
-    for (const string& slot : availableSlots) {
-        outFile << slot << "\n";
+    vector<string> slots =
+        slotGraph.findAvailableSlots(date, doctorId);
+
+    ofstream out(DATA_PATH + "available_slots.txt");
+    out << "AVAILABLE_SLOTS\n";
+    for (const string& slot : slots) {
+        out << slot << "\n";
     }
-    outFile.close();
 }
 
-void getAllAppointments() {
-    appointmentList.saveToFile("../DataFiles/all_appointments.txt");
+void exportAllAppointments() {
+    appointmentList.saveToFile(
+        DATA_PATH + "all_appointments.txt"
+    );
 }
+
+/* =====================================================
+   MAIN CONTROLLER
+   ===================================================== */
 
 int main() {
-    appointmentList.loadFromFile("../DataFiles/appointments.txt");
+    appointmentList.loadFromFile(
+        DATA_PATH + "appointments.txt"
+    );
 
-    ifstream commandFile("../DataFiles/schedule_command.txt");
+    ifstream cmd(DATA_PATH + "schedule_command.txt");
     string command;
-    getline(commandFile, command);
-    commandFile.close();
+    getline(cmd, command);
 
-    if (command == "SCHEDULE_APPOINTMENT") {
+    if (command == "SCHEDULE_APPOINTMENT")
         scheduleAppointment();
-    }
-    else if (command == "GET_AVAILABLE_SLOTS") {
+    else if (command == "GET_AVAILABLE_SLOTS")
         getAvailableSlots();
-    }
-    else if (command == "GET_ALL_APPOINTMENTS") {
-        getAllAppointments();
-    }
+    else if (command == "GET_ALL_APPOINTMENTS")
+        exportAllAppointments();
 
     return 0;
 }
