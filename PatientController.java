@@ -1,106 +1,259 @@
-package controller;
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <queue>
+#include <sstream>
+#include <map>
 
-import Service.CppIntegrationService;
-import model.Patient;
-import javax.swing.*;
-import java.util.List;
+using namespace std;
 
-public class PatientController {
+/* =====================================================
+   LINKED LIST: Appointment Records
+   ===================================================== */
 
-    public static boolean validatePatientData(String name, String ageStr, String disease, String phone) {
-        // Name validation
-        if (!Patient.isValidName(name)) {
-            JOptionPane.showMessageDialog(null,
-                    "Invalid name! Only alphabets and spaces allowed.",
-                    "Validation Error",
-                    JOptionPane.ERROR_MESSAGE);
-            return false;
-        }
+struct Appointment {
+    int appointmentId;
+    int patientId;
+    int doctorId;
+    string date;
+    string timeSlot;
+    string status;
+    Appointment* next;
+};
 
-        // Age validation
-        try {
-            int age = Integer.parseInt(ageStr);
-            if (!Patient.isValidAge(age)) {
-                JOptionPane.showMessageDialog(null,
-                        "Invalid age! Must be between 1 and 119.",
-                        "Validation Error",
-                        JOptionPane.ERROR_MESSAGE);
+class AppointmentService {
+private:
+    Appointment* head;
+    int idCounter;
+
+    Appointment* buildAppointment(int pid, int did,
+                                   const string& date,
+                                   const string& slot) {
+        return new Appointment{
+            idCounter++, pid, did, date, slot,
+            "SCHEDULED", nullptr
+        };
+    }
+
+public:
+    AppointmentService() : head(nullptr), idCounter(1) {}
+
+    bool slotAvailable(int doctorId,
+                       const string& date,
+                       const string& slot) const {
+        Appointment* curr = head;
+        while (curr) {
+            if (curr->doctorId == doctorId &&
+                curr->date == date &&
+                curr->timeSlot == slot &&
+                curr->status == "SCHEDULED") {
                 return false;
             }
-        } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(null,
-                    "Invalid age! Must be a number.",
-                    "Validation Error",
-                    JOptionPane.ERROR_MESSAGE);
-            return false;
+            curr = curr->next;
         }
-
-        // Disease validation
-        if (disease == null || disease.trim().isEmpty()) {
-            JOptionPane.showMessageDialog(null,
-                    "Disease field cannot be empty!",
-                    "Validation Error",
-                    JOptionPane.ERROR_MESSAGE);
-            return false;
-        }
-
-        // Phone validation
-        if (!Patient.isValidPhone(phone)) {
-            JOptionPane.showMessageDialog(null,
-                    "Invalid phone number! Must be 11 digits.",
-                    "Validation Error",
-                    JOptionPane.ERROR_MESSAGE);
-            return false;
-        }
-
         return true;
     }
 
-    public static void addPatient(int id, String name, int age, String disease, String phone) {
-        String result = CppIntegrationService.addPatient(id, name, age, disease, phone);
-
-        if (result.contains("SUCCESS")) {
-            JOptionPane.showMessageDialog(null,
-                    "Patient added successfully!\n" + result,
-                    "Success",
-                    JOptionPane.INFORMATION_MESSAGE);
-        } else {
-            System.out.println(result);
-            JOptionPane.showMessageDialog(null,
-                    "Failed to add patient:\n" + result,
-                    "Error",
-                    JOptionPane.ERROR_MESSAGE);
-        }
-
-        System.out.println("program reached here!");
+    void addAppointment(int patientId,
+                        int doctorId,
+                        const string& date,
+                        const string& slot) {
+        Appointment* appt =
+            buildAppointment(patientId, doctorId, date, slot);
+        appt->next = head;
+        head = appt;
     }
 
-    public static String searchPatient(int id) {
-        String result = CppIntegrationService.searchPatient(id);
+    void persist(const string& file) const {
+        ofstream out(file);
+        Appointment* curr = head;
 
-        if (result.contains("NOT_FOUND")) {
-            return "Patient not found with ID: " + id;
-        } else if (result.contains("FOUND")) {
-            String[] lines = result.split("\n");
-            if (lines.length > 1) {
-                return "Patient Found:\n" + formatPatientData(lines[1]);
-            }
+        while (curr) {
+            out << curr->appointmentId << ","
+                << curr->patientId << ","
+                << curr->doctorId << ","
+                << curr->date << ","
+                << curr->timeSlot << ","
+                << curr->status << "\n";
+            curr = curr->next;
+        }
+    }
+
+    void restore(const string& file) {
+        ifstream in(file);
+        if (!in.is_open()) return;
+
+        string line;
+        while (getline(in, line)) {
+            stringstream ss(line);
+            Appointment* appt = new Appointment();
+            string temp;
+
+            getline(ss, temp, ','); appt->appointmentId = stoi(temp);
+            getline(ss, temp, ','); appt->patientId = stoi(temp);
+            getline(ss, temp, ','); appt->doctorId = stoi(temp);
+            getline(ss, appt->date, ',');
+            getline(ss, appt->timeSlot, ',');
+            getline(ss, appt->status, ',');
+
+            appt->next = head;
+            head = appt;
+
+            idCounter = max(idCounter, appt->appointmentId + 1);
+        }
+    }
+};
+
+AppointmentService appointmentService;
+
+/* =====================================================
+   GRAPH (BFS): Doctor Slot Scheduling
+   ===================================================== */
+
+struct SlotNode {
+    string time;
+    bool free;
+    int doctorId;
+};
+
+class SlotScheduler {
+private:
+    map<string, vector<SlotNode>> calendar;
+
+    vector<string> dailySlots() const {
+        return {
+            "09:00-10:00", "10:00-11:00", "11:00-12:00",
+            "14:00-15:00", "15:00-16:00", "16:00-17:00"
+        };
+    }
+
+public:
+    void initializeDate(const string& date, int doctorId) {
+        for (const auto& t : dailySlots()) {
+            bool available =
+                appointmentService.slotAvailable(doctorId, date, t);
+            calendar[date].push_back({ t, available, doctorId });
+        }
+    }
+
+    vector<string> fetchAvailable(const string& date, int doctorId) {
+        if (!calendar.count(date)) {
+            initializeDate(date, doctorId);
+        }
+
+        vector<string> result;
+        queue<SlotNode> bfs;
+
+        for (const auto& s : calendar[date]) {
+            if (s.doctorId == doctorId)
+                bfs.push(s);
+        }
+
+        while (!bfs.empty()) {
+            SlotNode current = bfs.front();
+            bfs.pop();
+
+            if (current.free)
+                result.push_back(current.time);
         }
         return result;
     }
 
-    public static List<String> getAllPatientsSorted() {
-        return CppIntegrationService.getAllPatientsSorted();
+    void reserve(const string& date,
+                 const string& time,
+                 int doctorId) {
+        for (auto& s : calendar[date]) {
+            if (s.time == time && s.doctorId == doctorId) {
+                s.free = false;
+                return;
+            }
+        }
+    }
+};
+
+SlotScheduler slotScheduler;
+
+/* =====================================================
+   FILE INTERFACE (GUI COMPATIBLE)
+   ===================================================== */
+
+const string DATA_DIR = "../DataFiles/";
+
+void handleScheduling() {
+    ifstream in(DATA_DIR + "schedule_input.txt");
+    string row;
+    getline(in, row);
+
+    stringstream ss(row);
+    string temp, date, slot;
+    int patientId, doctorId;
+
+    getline(ss, temp, ','); patientId = stoi(temp);
+    getline(ss, temp, ','); doctorId = stoi(temp);
+    getline(ss, date, ',');
+    getline(ss, slot, ',');
+
+    ofstream out(DATA_DIR + "schedule_output.txt");
+
+    if (appointmentService.slotAvailable(doctorId, date, slot)) {
+        appointmentService.addAppointment(patientId, doctorId, date, slot);
+        slotScheduler.reserve(date, slot, doctorId);
+
+        out << "SUCCESS\n";
+        out << "Appointment scheduled on "
+            << date << " at " << slot << "\n";
+    }
+    else {
+        out << "ERROR: Slot already booked\n";
     }
 
-    private static String formatPatientData(String csvLine) {
-        String[] parts = csvLine.split(",");
-        if (parts.length >= 5) {
-            return String.format(
-                    "ID: %s\nName: %s\nAge: %s\nDisease: %s\nPhone: %s",
-                    parts[0], parts[1], parts[2], parts[3], parts[4]
-            );
-        }
-        return csvLine;
-    }
+    appointmentService.persist(DATA_DIR + "appointments.txt");
+}
+
+void handleSlotQuery() {
+    ifstream in(DATA_DIR + "slots_query.txt");
+    int doctorId;
+    string date;
+
+    in >> doctorId;
+    in.ignore();
+    getline(in, date);
+
+    vector<string> slots =
+        slotScheduler.fetchAvailable(date, doctorId);
+
+    ofstream out(DATA_DIR + "available_slots.txt");
+    out << "AVAILABLE_SLOTS\n";
+    for (const auto& s : slots)
+        out << s << "\n";
+}
+
+void handleExport() {
+    appointmentService.persist(
+        DATA_DIR + "all_appointments.txt"
+    );
+}
+
+/* =====================================================
+   PROGRAM CONTROLLER
+   ===================================================== */
+
+int main() {
+    appointmentService.restore(
+        DATA_DIR + "appointments.txt"
+    );
+
+    ifstream cmd(DATA_DIR + "schedule_command.txt");
+    string command;
+    getline(cmd, command);
+
+    if (command == "SCHEDULE_APPOINTMENT")
+        handleScheduling();
+    else if (command == "GET_AVAILABLE_SLOTS")
+        handleSlotQuery();
+    else if (command == "GET_ALL_APPOINTMENTS")
+        handleExport();
+
+    return 0;
 }
