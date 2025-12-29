@@ -1,0 +1,357 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <map>
+#include <vector>
+#include <set>
+#include <queue>
+#include <sstream>
+#include <algorithm>
+#include <climits>
+using namespace std;
+
+// ===== LEVEL-1 DSA: HASH TABLE =====
+struct Patient {
+    int id;
+    string name;
+    int age;
+    string disease;
+    string phone;
+    int priority; // 1=High (Emergency/Senior), 2=Normal
+};
+
+unordered_map<int, Patient> patientHashTable;
+
+// ===== LEVEL-2 DSA: AVL TREE =====
+struct AVLNode {
+    Patient data;
+    AVLNode* left;
+    AVLNode* right;
+    int height;
+};
+
+class AVLTree {
+private:
+    AVLNode* root;
+
+    int getHeight(AVLNode* node) {
+        return node ? node->height : 0;
+    }
+
+    int getBalance(AVLNode* node) {
+        return node ? getHeight(node->left) - getHeight(node->right) : 0;
+    }
+
+    AVLNode* rightRotate(AVLNode* y) {
+        AVLNode* x = y->left;
+        AVLNode* T2 = x->right;
+        x->right = y;
+        y->left = T2;
+        y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
+        x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
+        return x;
+    }
+
+    AVLNode* leftRotate(AVLNode* x) {
+        AVLNode* y = x->right;
+        AVLNode* T2 = y->left;
+        y->left = x;
+        x->right = T2;
+        x->height = max(getHeight(x->left), getHeight(x->right)) + 1;
+        y->height = max(getHeight(y->left), getHeight(y->right)) + 1;
+        return y;
+    }
+
+    AVLNode* insert(AVLNode* node, Patient patient) {
+        if (!node) {
+            AVLNode* newNode = new AVLNode();
+            newNode->data = patient;
+            newNode->left = newNode->right = nullptr;
+            newNode->height = 1;
+            return newNode;
+        }
+
+        if (patient.id < node->data.id)
+            node->left = insert(node->left, patient);
+        else if (patient.id > node->data.id)
+            node->right = insert(node->right, patient);
+        else
+            return node;
+
+        node->height = 1 + max(getHeight(node->left), getHeight(node->right));
+        int balance = getBalance(node);
+
+        // Left-Left
+        if (balance > 1 && patient.id < node->left->data.id)
+            return rightRotate(node);
+
+        // Right-Right
+        if (balance < -1 && patient.id > node->right->data.id)
+            return leftRotate(node);
+
+        // Left-Right
+        if (balance > 1 && patient.id > node->left->data.id) {
+            node->left = leftRotate(node->left);
+            return rightRotate(node);
+        }
+
+        // Right-Left
+        if (balance < -1 && patient.id < node->right->data.id) {
+            node->right = rightRotate(node->right);
+            return leftRotate(node);
+        }
+
+        return node;
+    }
+
+    void inorder(AVLNode* node, ofstream& outFile) {
+        if (node) {
+            inorder(node->left, outFile);
+            outFile << node->data.id << ","
+                << node->data.name << ","
+                << node->data.age << ","
+                << node->data.disease << ","
+                << node->data.phone << "\n";
+            inorder(node->right, outFile);
+        }
+    }
+
+public:
+    AVLTree() { root = nullptr; }
+
+    void insertPatient(Patient patient) {
+        root = insert(root, patient);
+    }
+
+    void saveSortedPatients(string filename) {
+        ofstream outFile(filename);
+        inorder(root, outFile);
+        outFile.close();
+    }
+};
+
+AVLTree avlTree;
+
+// ===== NEW: PATIENT REFERRAL GRAPH (DISEASE-BASED CONNECTIONS) =====
+class PatientReferralGraph {
+private:
+    map<int, vector<pair<int, string>>> adjList; // patientId -> {referredTo, reason}
+    map<string, vector<int>> diseaseGroups; // disease -> list of patients
+
+public:
+    void addPatient(int patientId, string disease) {
+        diseaseGroups[disease].push_back(patientId);
+    }
+
+    void addReferral(int fromPatient, int toPatient, string reason) {
+        adjList[fromPatient].push_back({ toPatient, reason });
+    }
+
+    // BFS to find all patients with similar disease
+    vector<int> findSimilarPatients(int patientId) {
+        if (patientHashTable.find(patientId) == patientHashTable.end()) {
+            return {};
+        }
+
+        string disease = patientHashTable[patientId].disease;
+        vector<int> similar;
+
+        for (int id : diseaseGroups[disease]) {
+            if (id != patientId) {
+                similar.push_back(id);
+            }
+        }
+        return similar;
+    }
+
+    // DFS to trace referral chain
+    void traceReferralChain(int patientId, set<int>& visited, vector<int>& chain) {
+        visited.insert(patientId);
+        chain.push_back(patientId);
+
+        for (auto& referral : adjList[patientId]) {
+            int nextPatient = referral.first;
+            if (visited.find(nextPatient) == visited.end()) {
+                traceReferralChain(nextPatient, visited, chain);
+            }
+        }
+    }
+
+    // Dijkstra for priority-based patient routing
+    int findHighestPriorityPatient(string disease) {
+        int highestPriorityId = -1;
+        int highestPriority = INT_MAX;
+
+        for (int id : diseaseGroups[disease]) {
+            if (patientHashTable[id].priority < highestPriority) {
+                highestPriority = patientHashTable[id].priority;
+                highestPriorityId = id;
+            }
+        }
+        return highestPriorityId;
+    }
+
+    void saveGraphAnalysis(string filename) {
+        ofstream outFile(filename);
+        outFile << "=== PATIENT REFERRAL NETWORK ANALYSIS ===\n\n";
+
+        outFile << "Disease Groups:\n";
+        for (auto& group : diseaseGroups) {
+            outFile << "Disease: " << group.first << " | Patients: " << group.second.size() << "\n";
+            for (int id : group.second) {
+                outFile << "  - Patient ID: " << id
+                    << " (Priority: " << patientHashTable[id].priority << ")\n";
+            }
+            outFile << "\n";
+        }
+
+        outFile << "Referral Connections:\n";
+        for (auto& pair : adjList) {
+            outFile << "Patient " << pair.first << " referred to:\n";
+            for (auto& ref : pair.second) {
+                outFile << "  -> Patient " << ref.first << " (Reason: " << ref.second << ")\n";
+            }
+        }
+        outFile.close();
+    }
+};
+
+PatientReferralGraph patientGraph;
+
+// ====== CONSTANT PATH (CHANGE ONLY IF NEEDED) ======
+const string BASE_PATH = "E:\\MedicalAppointmentSystem\\MedicalAppointmentSystem\\DataFiles\\";
+
+// ===== OPERATIONS =====
+void addPatient() {
+    ifstream inFile(BASE_PATH + "patient_input.txt");
+    ofstream outFile(BASE_PATH + "patient_output.txt");
+
+    if (!inFile.is_open()) {
+        outFile << "ERROR: Cannot open patient_input.txt\n";
+        outFile.close();
+        return;
+    }
+
+    Patient p;
+    string line;
+    while (getline(inFile, line)) {
+        stringstream ss(line);
+        string temp;
+
+        getline(ss, temp, ','); p.id = stoi(temp);
+        getline(ss, p.name, ',');
+        getline(ss, temp, ','); p.age = stoi(temp);
+        getline(ss, p.disease, ',');
+        getline(ss, p.phone, ',');
+
+        // Auto-assign priority: High for seniors (>60) or Emergency
+        if (p.age > 60 || p.disease == "Emergency" || p.disease == "Critical") {
+            p.priority = 1; // High Priority
+        }
+        else {
+            p.priority = 2; // Normal Priority
+        }
+
+        // Hash Table insertion - O(1)
+        patientHashTable[p.id] = p;
+
+        // AVL Tree insertion - O(log n)
+        avlTree.insertPatient(p);
+
+        // Graph insertion for disease tracking
+        patientGraph.addPatient(p.id, p.disease);
+    }
+    inFile.close();
+
+    outFile << "SUCCESS: Patient added successfully!\n";
+    outFile << "Total patients: " << patientHashTable.size() << "\n";
+    outFile.close();
+}
+
+void searchPatient() {
+    ifstream inFile(BASE_PATH + "search_input.txt");
+    ofstream outFile(BASE_PATH + "search_output.txt");
+
+    if (!inFile.is_open()) {
+        outFile << "ERROR: Cannot open search_input.txt\n";
+        outFile.close();
+        return;
+    }
+
+    int searchId;
+    inFile >> searchId;
+    inFile.close();
+
+    // Hash Table search - O(1)
+    if (patientHashTable.find(searchId) != patientHashTable.end()) {
+        Patient p = patientHashTable[searchId];
+        outFile << "FOUND\n";
+        outFile << p.id << "," << p.name << "," << p.age << ","
+            << p.disease << "," << p.phone << "\n";
+
+        // Find similar patients using graph
+        vector<int> similar = patientGraph.findSimilarPatients(searchId);
+        if (!similar.empty()) {
+            outFile << "\nSimilar Patients (Same Disease):\n";
+            for (int id : similar) {
+                outFile << "Patient ID: " << id << " - " << patientHashTable[id].name << "\n";
+            }
+        }
+    }
+    else {
+        outFile << "NOT_FOUND\n";
+    }
+    outFile.close();
+}
+
+void getAllPatientsSorted() {
+    avlTree.saveSortedPatients(BASE_PATH + "sorted_patients.txt");
+}
+
+void findHighPriorityPatients() {
+    ofstream outFile(BASE_PATH + "priority_patients.txt");
+    outFile << "=== HIGH PRIORITY PATIENTS ===\n\n";
+
+    for (auto& pair : patientHashTable) {
+        Patient p = pair.second;
+        if (p.priority == 1) {
+            outFile << "ID: " << p.id << " | Name: " << p.name
+                << " | Age: " << p.age << " | Disease: " << p.disease << "\n";
+        }
+    }
+    outFile.close();
+}
+
+void analyzePatientNetwork() {
+    // Sample referrals for demonstration
+    patientGraph.addReferral(1, 2, "Specialist consultation");
+    patientGraph.addReferral(2, 3, "Follow-up treatment");
+
+    patientGraph.saveGraphAnalysis(BASE_PATH + "patient_network_analysis.txt");
+}
+
+int main() {
+    ifstream commandFile(BASE_PATH + "command.txt");
+    string command;
+    getline(commandFile, command);
+    commandFile.close();
+
+    if (command == "ADD_PATIENT") {
+        addPatient();
+    }
+    else if (command == "SEARCH_PATIENT") {
+        searchPatient();
+    }
+    else if (command == "GET_ALL_SORTED") {
+        getAllPatientsSorted();
+    }
+    else if (command == "FIND_HIGH_PRIORITY") {
+        findHighPriorityPatients();
+    }
+    else if (command == "ANALYZE_NETWORK") {
+        analyzePatientNetwork();
+    }
+
+    return 0;
+}
